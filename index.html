@@ -11,6 +11,8 @@
 <meta name="theme-color" content="#0a0f1e">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.json">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <link rel="apple-touch-icon" href="icon.png">
 <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -404,68 +406,92 @@ body{background:var(--bg);color:var(--text);font-family:'Plus Jakarta Sans',sans
 </div>
 
 <script>
-// ─── STORAGE ─────────────────────────────────
-async function sGet(key){
-  try{
-    if(window.storage){
-      const r=await window.storage.get(key);
-      return r?JSON.parse(r.value):null;
-    } else {
-      const r=localStorage.getItem(key);
-      return r?JSON.parse(r):null;
-    }
-  }catch(e){
-    try{ const r=localStorage.getItem(key); return r?JSON.parse(r):null; }catch(e2){return null;}
-  }
-}
-async function sSet(key,val){
-  const str=JSON.stringify(val);
-  try{
-    if(window.storage){ await window.storage.set(key,str); }
-    else { localStorage.setItem(key,str); }
-  }catch(e){
-    try{ localStorage.setItem(key,str); }catch(e2){console.error(e2);}
-  }
-  // Always also persist to localStorage as backup
-  try{ localStorage.setItem(key,str); }catch(e){}
-}
-
-// ─── DATA ────────────────────────────────────
-const TODAY=new Date().toISOString().split('T')[0];
-let S={
-  pin:'1007', pinName:'Habibi', connected:false, coupleUnlocked:false, dailyNote:null, dailyComment:'',
-  lastDate:null,
-  prayers:makePrayers(), quran:makeQuran(), tasks:makeTasks(),
-  coupleGoals:makeCG(),
-  history:[],
-  supPin:null, supPinConnected:false,
-  supPrayers:makeSupPrayers(), supQuran:makeSupQuran(), supGoals:makeSupGoals(),
-  supLastDate:null
+// ─── FIREBASE CONFIG ─────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyC8WFL4_G-yeNFVjvFuhCsrQOh6Int_eec",
+  authDomain: "yawmi-bb1f7.firebaseapp.com",
+  databaseURL: "https://yawmi-bb1f7-default-rtdb.firebaseio.com",
+  projectId: "yawmi-bb1f7",
+  storageBucket: "yawmi-bb1f7.firebasestorage.app",
+  messagingSenderId: "884217187784",
+  appId: "1:884217187784:web:87dd8e29d490d3fb30c4fd"
 };
 
+let db = null;
+let firebaseReady = false;
+const deviceId = 'dev_' + Math.random().toString(36).slice(2);
+
+function initFirebase(){
+  try {
+    if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+    firebaseReady = true;
+    // Real-time listener
+    db.ref('yawmi').on('value', snapshot => {
+      const data = snapshot.val();
+      if(!data) return;
+      if(data.lastUpdatedBy === deviceId) return;
+      // Preserve local session state
+      const keep = {connected:S.connected, coupleUnlocked:S.coupleUnlocked, supPinConnected:S.supPinConnected};
+      Object.assign(S, data, keep);
+      render();
+      if(document.getElementById('view-supervisor').classList.contains('active')) renderSupPanel();
+      if(document.getElementById('view-supspace').classList.contains('active')) renderSupSpace();
+    });
+    console.log('Firebase connected');
+  } catch(e){ console.log('Firebase error:', e); }
+}
+
+// ─── STORAGE ─────────────────────────────────
+async function sGet(key){
+  if(firebaseReady && db){
+    try{
+      const snap = await db.ref(key).get();
+      if(snap.exists()){
+        const val = snap.val();
+        delete val.lastUpdatedBy;
+        return val;
+      }
+    }catch(e){}
+  }
+  try{
+    const v = localStorage.getItem(key);
+    if(v) return JSON.parse(v);
+  }catch(e){}
+  return null;
+}
+
+async function sSet(key, val){
+  const toSave = {...val, lastUpdatedBy: deviceId};
+  if(firebaseReady && db){
+    try{ await db.ref(key).set(toSave); }catch(e){}
+  }
+  try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){}
+}
+
+// ─── DATA FACTORIES ──────────────────────────
 function makePrayers(){return[
-  {id:'fajr',    ar:'الفجر',  name:'Fajr',    s:'none',t:''},
-  {id:'dhuhr',   ar:'الظهر',  name:'Dhuhr',   s:'none',t:''},
-  {id:'asr',     ar:'العصر',  name:'Asr',     s:'none',t:''},
-  {id:'maghrib', ar:'المغرب', name:'Maghrib', s:'none',t:''},
-  {id:'isha',    ar:'العشاء', name:'Isha',    s:'none',t:''},
+  {id:'p1',ar:'الفجر',  name:'Fajr',    s:'none',t:''},
+  {id:'p2',ar:'الظهر',  name:'Dhuhr',   s:'none',t:''},
+  {id:'p3',ar:'العصر',  name:'Asr',     s:'none',t:''},
+  {id:'p4',ar:'المغرب', name:'Maghrib', s:'none',t:''},
+  {id:'p5',ar:'العشاء', name:'Isha',    s:'none',t:''},
 ];}
 function makeQuran(){return[
-  {id:'q1',ar:'سورة الفاتحة',    fr:'Al-Fatiha (7 versets)',      s:'none',t:''},
-  {id:'q2',ar:'سورة الإخلاص × 3',fr:'Al-Ikhlâs — 3 fois',         s:'none',t:''},
-  {id:'q3',ar:'تلاوة يومية',      fr:'Lecture quotidienne (10 min)',s:'none',t:''},
-  {id:'q4',ar:'الصلاة في وقتها',  fr:'Prier à l heure',            s:'none',t:''},
+  {id:'q1',ar:'سورة الفاتحة',    fr:'Al-Fatiha (7 versets)',       s:'none',t:''},
+  {id:'q2',ar:'سورة الإخلاص × 3',fr:'Al-Ikhlâs — 3 fois',          s:'none',t:''},
+  {id:'q3',ar:'تلاوة يومية',      fr:'Lecture quotidienne (10 min)', s:'none',t:''},
+  {id:'q4',ar:'الصلاة في وقتها',  fr:'Prier à l heure',              s:'none',t:''},
 ];}
 function makeTasks(){return[
-  {id:'t3',label:'Faire du sport',      sub:'30 minutes',       s:'none',t:'',del:true},
+  {id:'t3',label:'Faire du sport',sub:'30 minutes',s:'none',t:'',del:true},
 ];}
 function makeCG(){return[
-  {id:'cg1',label:'Tenue du foyer / Repas',    moi:{v:null},conjoint:{v:null},note:''},
-  {id:'cg2',label:'Pudeur / Tenue vestimentaire',moi:{v:null},conjoint:{v:null},note:''},
-  {id:'cg3',label:'Prière en commun',          moi:{v:null},conjoint:{v:null},note:''},
-  {id:'cg4',label:'Lecture coranique',          moi:{v:null},conjoint:{v:null},note:''},
+  {id:'cg1',label:'Tenue du foyer / Repas',         moi:{v:null},conjoint:{v:null},note:''},
+  {id:'cg2',label:'Pudeur / Tenue vestimentaire',   moi:{v:null},conjoint:{v:null},note:''},
+  {id:'cg3',label:'Prière en commun',               moi:{v:null},conjoint:{v:null},note:''},
+  {id:'cg4',label:'Lecture coranique',              moi:{v:null},conjoint:{v:null},note:''},
 ];}
-
 function makeSupPrayers(){return[
   {id:'sp1',ar:'الفجر',  name:'Fajr',    s:'none',t:''},
   {id:'sp2',ar:'الظهر',  name:'Dhuhr',   s:'none',t:''},
@@ -473,26 +499,25 @@ function makeSupPrayers(){return[
   {id:'sp4',ar:'المغرب', name:'Maghrib', s:'none',t:''},
   {id:'sp5',ar:'العشاء', name:'Isha',    s:'none',t:''},
 ];}
-
 function makeSupQuran(){return[
-  {id:'sq1', label:'Al-Fatiha',          ar:'الفاتحة',      niveau:'Fondement',   s:'none',t:''},
-  {id:'sq2', label:'Al-Ikhlâs',          ar:'الإخلاص',      niveau:'Fondement',   s:'none',t:''},
-  {id:'sq3', label:'Al-Falaq',           ar:'الفلق',         niveau:'Fondement',   s:'none',t:''},
-  {id:'sq4', label:'An-Nâs',             ar:'الناس',         niveau:'Fondement',   s:'none',t:''},
-  {id:'sq5', label:'Al-Asr',             ar:'العصر',         niveau:'Intermédiaire',s:'none',t:''},
-  {id:'sq6', label:'Al-Kawthar',         ar:'الكوثر',        niveau:'Intermédiaire',s:'none',t:''},
-  {id:'sq7', label:'Al-Mulk',            ar:'الملك',         niveau:'Avancé',      s:'none',t:''},
-  {id:'sq8', label:'Yasin',              ar:'يس',            niveau:'Avancé',      s:'none',t:''},
+  {id:'sq1',label:'Al-Fatiha', ar:'الفاتحة',niveau:'Fondement',   s:'none',t:'',audio:'https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/1.mp3'},
+  {id:'sq2',label:'Al-Ikhlâs',ar:'الإخلاص',niveau:'Fondement',   s:'none',t:'',audio:'https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/112.mp3'},
+  {id:'sq3',label:'Al-Falaq',  ar:'الفلق',  niveau:'Fondement',   s:'none',t:'',audio:'https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/113.mp3'},
+  {id:'sq4',label:'An-Nâs',   ar:'الناس',  niveau:'Fondement',   s:'none',t:'',audio:'https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/114.mp3'},
+  {id:'sq5',label:'Al-Asr',   ar:'العصر',  niveau:'Intermédiaire',s:'none',t:'',audio:'https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/103.mp3'},
+  {id:'sq6',label:'Al-Kawthar',ar:'الكوثر',niveau:'Intermédiaire',s:'none',t:'',audio:'https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/108.mp3'},
+  {id:'sq7',label:'Al-Mulk',  ar:'الملك',  niveau:'Avancé',      s:'none',t:'',audio:'https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/67.mp3'},
+  {id:'sq8',label:'Yasin',    ar:'يس',     niveau:'Avancé',      s:'none',t:'',audio:'https://cdn.islamic.network/quran/audio-surah/128/ar.alafasy/36.mp3'},
 ];}
-
 function makeSupGoals(){return[
-  {id:'sg1', label:'Être dans l instant pendant la prière', note:'', done:false},
-  {id:'sg2', label:'Pratique de la confiance totale en Dieu (Tawakkul)', note:'', done:false},
-  {id:'sg3', label:'Réflexion spirituelle du jour', note:'', done:false},
+  {id:'sg1',label:'Être dans l instant pendant la prière',note:'',done:false},
+  {id:'sg2',label:'Pratique de la confiance totale en Dieu (Tawakkul)',note:'',done:false},
+  {id:'sg3',label:'Réflexion spirituelle du jour',note:'',done:false},
 ];}
 
 // ─── INIT ────────────────────────────────────
 async function init(){
+  initFirebase();
   const saved=await sGet('yawmi');
   if(saved){
     // Keep supervisor config from saved, fallback to hardcoded defaults
@@ -956,12 +981,13 @@ function renderSupSpace(){
     const items = S.supQuran.filter(q=>q.niveau===n);
     if(!items.length) return '';
     return `<div class="ss-niveau">${n}</div>` + items.map(q=>`
-      <div class="ss-qi ${q.s==='done'?'done':''}" onclick="toggleSupQuran('${q.id}')">
-        <div class="ss-check">${q.s==='done'?'✓':''}</div>
-        <div>
+      <div class="ss-qi ${q.s==='done'?'done':''}">
+        <div class="ss-check" onclick="toggleSupQuran('${q.id}')" style="cursor:pointer">${q.s==='done'?'✓':''}</div>
+        <div style="flex:1" onclick="toggleSupQuran('${q.id}')" style="cursor:pointer">
           <div style="font-family:'Amiri',serif;font-size:1rem">${q.ar}</div>
           <div style="font-size:.72rem;color:var(--text3)">${q.label}</div>
         </div>
+        ${q.audio ? `<button onclick="playAudio('${q.id}','${q.audio}')" style="background:rgba(124,106,247,.15);border:1px solid rgba(124,106,247,.3);border-radius:8px;padding:6px 10px;color:#a78bfa;font-size:.8rem;cursor:pointer;flex-shrink:0" id="abtn_${q.id}">▶️</button>` : ''}
       </div>`).join('');
   }).join('');
 
@@ -1138,6 +1164,48 @@ async function resetApp(){
   closeModal();
   render();
   renderSupPanel();
+}
+
+
+// ─── AUDIO RÉCITATION ────────────────────────
+let currentAudio = null;
+let currentAudioId = null;
+
+function playAudio(id, url){
+  const btn = document.getElementById('abtn_'+id);
+
+  // If same track playing, pause it
+  if(currentAudioId === id && currentAudio && !currentAudio.paused){
+    currentAudio.pause();
+    if(btn) btn.textContent = '▶️';
+    currentAudioId = null;
+    return;
+  }
+
+  // Stop previous
+  if(currentAudio){
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+    if(currentAudioId){
+      const prevBtn = document.getElementById('abtn_'+currentAudioId);
+      if(prevBtn) prevBtn.textContent = '▶️';
+    }
+  }
+
+  // Play new
+  currentAudio = new Audio(url);
+  currentAudioId = id;
+  if(btn) btn.textContent = '⏸️';
+
+  currentAudio.play().catch(e => {
+    if(btn) btn.textContent = '▶️';
+    alert('Erreur de lecture. Vérifiez votre connexion.');
+  });
+
+  currentAudio.onended = () => {
+    if(btn) btn.textContent = '▶️';
+    currentAudioId = null;
+  };
 }
 
 // ─── HISTORY ─────────────────────────────────
